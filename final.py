@@ -1,7 +1,16 @@
 # <TODO: Step 3 - Imports>
 # Complete the imports for all the necessary components from the semantic_kernel library.
 import logging
+import os
+import asyncio
+import pandas as pd
+from dotenv import load_dotenv
 
+from semantic_kernel import Kernel
+from semantic_kernel.agents import ChatCompletionAgent
+from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
+
+load_dotenv()
 # -----------------
 # Logging Setup
 # -----------------
@@ -37,20 +46,24 @@ def log_agent_message(content):
 # <TODO: Step 2 - Environment Setup>
 # Load the API key and endpoint URL from the .env file.
 
-API_KEY = None
-BASE_URL = None
-API_VERSION = None
-
+API_KEY = os.getenv("AZURE_OPENAI_KEY")
+BASE_URL = os.getenv("URL")
+API_VERSION = "2024-12-01-preview"
 
 # -----------------
 # Kernel and Chat Service
 # -----------------
 # <TODO: Step 3 - Kernel Initialization>
 # Initialize the Kernel, define the AzureChatCompletion service, and add it to the kernel.
-kernel = None
-chat_service = None
-# kernel.add_service(chat_service)
+kernel = Kernel()
+chat_service = AzureChatCompletion(
+    deployment_name="none", 
+    api_key=API_KEY,
+    base_url=BASE_URL,
+    api_version=API_VERSION
+)
 
+kernel.add_service(chat_service)
 
 # -----------------
 # Helper Functions
