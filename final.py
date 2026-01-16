@@ -85,6 +85,14 @@ def load_quality_instructions(file_path):
         list[str]: A list of strings, where each string is a line of instruction.
                    Returns an empty list if the file does not exist.
     """
+    
+    for file in os.listdir('specs'):
+        if file == file_path:
+            with open(os.path.join('specs', file_path), 'r') as f:
+                lines = f.readlines()
+                instructions = [line.strip() for line in lines if line.strip()]
+                return instructions
+    
     return []
 
 def load_reports_instructions(file_path):
@@ -98,6 +106,12 @@ def load_reports_instructions(file_path):
         list[str]: A list of strings for building the report. Returns an
                    empty list if the file does not exist.
     """
+    for file in os.listdir('specs'):
+        if file == file_path:
+            with open(os.path.join('specs', file_path), 'r') as f:
+                lines = f.readlines()
+                instructions = [line.strip() for line in lines if line.strip()]
+                return instructions
     return []
 
 def load_logs(file_path):
@@ -111,6 +125,12 @@ def load_logs(file_path):
         list[str]: A list of log entries. Returns an empty list if the file
                    does not exist.
     """
+    for file in os.listdir('logs'):
+        if file == file_path:
+            with open(os.path.join('logs', file_path), 'r') as f:
+                lines = f.readlines()
+                logs = [line.strip() for line in lines if line.strip()]
+                return logs
     return []
 
 def get_csv_name():
@@ -122,7 +142,23 @@ def get_csv_name():
     Returns:
         str: The relative path to the selected CSV file (e.g., 'data/my_file.csv').
     """
-    pass
+    csv_files = [file for file in os.listdir('data') if file.endswith('.csv')]
+    if not csv_files:
+        raise FileNotFoundError("No CSV files found in the 'data' directory.")
+
+    print("Available CSV files:")
+    for i, file in enumerate(csv_files):
+        print(f"{i + 1}. {file}")
+
+    while True:
+        try:
+            choice = int(input("Select a CSV file by number: "))
+            if 1 <= choice <= len(csv_files):
+                return os.path.join('data', csv_files[choice - 1])
+            else:
+                print("Invalid selection. Please try again.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
 
 def load_csv_file(file_path):
     """
@@ -136,6 +172,12 @@ def load_csv_file(file_path):
     Returns:
         str: A single string containing all the data from the CSV file.
     """
+    try:
+        df = pd.read_csv(file_path)
+        data_as_list = df.astype(str).values.flatten().tolist()
+        return ', '.join(data_as_list)
+    except Exception as e:
+        logging.error(f"Error loading CSV file {file_path}: {e}")   
     return ""
 
 class PythonExecutor:
@@ -161,6 +203,15 @@ class PythonExecutor:
                 - The error traceback as a string if an exception occurred,
                   otherwise None.
         """
+        for attempt in range(self.max_attempts):
+            try:
+                local_scope = {}
+                exec(code, {}, local_scope)
+                return True, None
+            except Exception as e:
+                logging.error(f"Execution attempt {attempt + 1} failed: {e}")
+                if attempt == self.max_attempts - 1:
+                    return False, str(e)
         return False, "Not implemented"
 
 def save_final_report(report, path='artifacts/final_report.md'):
@@ -172,7 +223,13 @@ def save_final_report(report, path='artifacts/final_report.md'):
         path (str, optional): The file path for the saved report.
                               Defaults to 'artifacts/final_report.md'.
     """
-    pass
+    try:
+        with open(path, 'w') as f:
+            f.write(report)
+        logging.info(f"Final report saved to {path}")
+    except Exception as e:
+        logging.error(f"Error saving final report: {e}")
+    
 
 
 # -----------------
@@ -200,6 +257,7 @@ AGENT_CONFIG = {
 # 2. Implement the agent factory function.
 def create_agent(name, instructions, service, settings=None):
     """Factory function to create a new ChatCompletionAgent."""
+    
     return None
 
 
