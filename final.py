@@ -7,7 +7,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from semantic_kernel import Kernel
-from semantic_kernel.agents import ChatCompletionAgent
+from semantic_kernel.agents import ChatCompletionAgent, AgentGroupChat, TerminationStrategy
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 
 load_dotenv()
@@ -241,12 +241,83 @@ data_quality_instructions = ''.join(load_quality_instructions("Data_Quality_Inst
 report_instructions = ''.join(load_reports_instructions("Report_Instructions.txt"))
 
 AGENT_CONFIG = {
-    "PythonExecutorAgent": '''''',
-    "DataCleaning": '''''',
-    "DataStatistics": '''''',
-    "AnalysisChecker": f'''''',
-    "ReportGenerator": f'''''',
-    "ReportChecker": f''''''
+    "PythonExecutorAgent": '''You are a Python code generation specialist. Your task is to write clean, executable Python code for data visualization.
+
+Guidelines:
+- Generate Python code that creates meaningful visualizations (histograms, box plots, scatter plots, etc.)
+- Use pandas for data manipulation and matplotlib/seaborn for plotting
+- Always save plots to 'artifacts/data_visualization.png'
+- Include proper labels, titles, and legends in visualizations
+- Handle edge cases and ensure code is robust
+- Output ONLY the Python code block, no explanations
+- Use plt.savefig() and plt.close() to save and close figures properly
+''',
+
+    "DataCleaning": '''You are a data cleaning specialist. Your task is to clean datasets by identifying and removing outliers.
+
+Guidelines:
+- Analyze the provided CSV data for outliers using statistical methods (IQR, Z-score, etc.)
+- Identify values that fall outside acceptable ranges
+- Document which values are being removed and why
+- Preserve data integrity while removing anomalies
+- Output the cleaned dataset along with a summary of removed values
+- Present data in a clear, structured format
+''',
+
+    "DataStatistics": '''You are a statistical analysis specialist. Your task is to compute descriptive statistics on cleaned datasets.
+
+Guidelines:
+- Calculate key statistics: mean, median, standard deviation, min, max, quartiles
+- Analyze data distribution and central tendencies
+- Identify any remaining patterns or concerns in the data
+- Present statistics in a clear, tabular format
+- Compare statistics before and after cleaning when relevant
+- Provide brief interpretations of the statistical findings
+''',
+
+    "AnalysisChecker": f'''You are a quality assurance specialist for data analysis. Your task is to verify that data cleaning and statistical analysis meet quality standards.
+
+Quality Check Instructions:
+{data_quality_instructions}
+
+Guidelines:
+- Verify that all outliers have been properly removed from the cleaned dataset
+- Confirm that statistics are computed on the cleaned data only
+- Check for consistency between reported values and actual data
+- Output "Approved" if all checks pass
+- Output detailed error messages if any check fails
+- Format output as JSON with required fields: title, original data table, cleaned data table, removed data table, descriptive statistics table
+''',
+
+    "ReportGenerator": f'''You are a professional report writer. Your task is to generate comprehensive data analysis reports.
+
+Report Format Instructions:
+{report_instructions}
+
+Guidelines:
+- Follow the provided report template exactly
+- Include all sections: Overview, Data Cleaning, Descriptive Statistics, Validation Summary, Data Visualization, Conclusions
+- Fill in all placeholders with actual data from the analysis
+- Reference the visualization image at 'artifacts/data_visualization.png'
+- Document the agent workflow in the summary table
+- Use clear, professional language
+- Ensure all dates and values are accurate
+''',
+
+    "ReportChecker": f'''You are a report quality reviewer. Your task is to verify that generated reports meet all requirements.
+
+Report Format Requirements:
+{report_instructions}
+
+Guidelines:
+- Verify all required sections are present and complete
+- Check that data values are consistent throughout the report
+- Ensure the visualization reference is correct
+- Validate that the agent workflow summary is accurate
+- Confirm proper markdown formatting
+- Output "Approved" if the report meets all standards
+- Output specific feedback for any issues that need correction
+'''
 }
 
 
@@ -257,8 +328,12 @@ AGENT_CONFIG = {
 # 2. Implement the agent factory function.
 def create_agent(name, instructions, service, settings=None):
     """Factory function to create a new ChatCompletionAgent."""
-    
-    return None
+    return ChatCompletionAgent(
+        kernel=kernel,  
+        service=chat_service,
+        name=name,
+        instructions=instructions
+    )
 
 
 # -----------------
@@ -278,12 +353,41 @@ class ApprovalTerminationStrategy(TerminationStrategy):
 # -----------------
 # <TODO: Step 5 - Build the Agents and Teams>
 # 3. Instantiate each agent with the correct name, prompt, and temperature setting.
-python_agent = None
-cleaning_agent = None
-stats_agent = None
-checker_agent = None
-report_agent = None
-report_checker_agent = None
+python_agent = create_agent(
+    name="PythonExecutorAgent",
+    instructions=AGENT_CONFIG["PythonExecutorAgent"],
+    service=chat_service
+)
+
+cleaning_agent = create_agent(
+    name="DataCleaning",
+    instructions=AGENT_CONFIG["DataCleaning"],
+    service=chat_service
+)
+
+stats_agent = create_agent(
+    name="DataStatistics",
+    instructions=AGENT_CONFIG["DataStatistics"],
+    service=chat_service
+)
+
+checker_agent = create_agent(
+    name="AnalysisChecker",
+    instructions=AGENT_CONFIG["AnalysisChecker"],
+    service=chat_service
+)
+
+report_agent = create_agent(
+    name="ReportGenerator",
+    instructions=AGENT_CONFIG["ReportGenerator"],
+    service=chat_service
+)
+
+report_checker_agent = create_agent(
+    name="ReportChecker",
+    instructions=AGENT_CONFIG["ReportChecker"],
+    service=chat_service
+)
 
 
 # -----------------
@@ -291,9 +395,29 @@ report_checker_agent = None
 # -----------------
 # <TODO: Step 5 - Build the Agents and Teams>
 # 4. Create the three agent group chats.
-analysis_chat = None
-code_chat = None
-report_chat = None
+analysis_chat = AgentGroupChat(
+    agents=[cleaning_agent, stats_agent, checker_agent],
+    termination_strategy=ApprovalTerminationStrategy(
+        agents=[checker_agent],
+        maximum_iterations=10
+    )
+)
+
+code_chat = AgentGroupChat(
+    agents=[python_agent],
+    termination_strategy=ApprovalTerminationStrategy(
+        agents=[python_agent],
+        maximum_iterations=5
+    )
+)
+
+report_chat = AgentGroupChat(
+    agents=[report_agent, report_checker_agent],
+    termination_strategy=ApprovalTerminationStrategy(
+        agents=[report_checker_agent],
+        maximum_iterations=10
+    )
+)
 
 
 # -----------------
@@ -304,31 +428,110 @@ report_chat = None
 async def main():
     """The main entry point for the agentic workflow."""
     # 1. Load the CSV data.
-    pass
+    csv_path = get_csv_name()
+    csv_data = load_csv_file(csv_path)
+    print(f"Loaded data from {csv_path}")
 
     # 2. Invoke the analysis chat.
-    pass
+    print("\n--- Starting Analysis Chat ---")
+    await analysis_chat.add_chat_message(
+        message=f"Please analyze and clean this CSV data, then compute statistics:\n{csv_data}"
+    )
+
+    analysis_result = None
+    async for content in analysis_chat.invoke():
+        log_agent_message(content)
+        print(f"{content.name}: {content.content[:200]}..." if len(content.content) > 200 else f"{content.name}: {content.content}")
+        analysis_result = content.content
 
     # 3. Get human approval.
-    pass
-    
+    print("\n--- Analysis Complete ---")
+    print("Please review the analysis results above.")
+    approval = input("Do you approve the cleaned data? (yes/no): ").strip().lower()
+
+    if approval != "yes":
+        print("Analysis not approved. Exiting workflow.")
+        return
+
     # 4. Save the cleaned data.
-    pass
+    print("\n--- Saving Cleaned Data ---")
+    with open("artifacts/cleaned_data.txt", "w") as f:
+        f.write(analysis_result)
+    print("Cleaned data saved to artifacts/cleaned_data.txt")
 
     # 5. Invoke the code chat to generate and execute visualization code.
-    pass
+    print("\n--- Starting Code Chat ---")
+    await code_chat.add_chat_message(
+        message=f"Generate Python visualization code for this cleaned data. Save the plot to 'artifacts/data_visualization.png':\n{analysis_result}"
+    )
+
+    generated_code = None
+    async for content in code_chat.invoke():
+        log_agent_message(content)
+        print(f"{content.name}: Generated code")
+        generated_code = content.content
 
     # 6. Execute the code in a retry loop.
-    pass
+    print("\n--- Executing Visualization Code ---")
+    executor = PythonExecutor(max_attempts=3)
+
+    # Extract code block if wrapped in markdown
+    code_to_run = generated_code
+    if "```python" in code_to_run:
+        code_to_run = code_to_run.split("```python")[1].split("```")[0]
+    elif "```" in code_to_run:
+        code_to_run = code_to_run.split("```")[1].split("```")[0]
+
+    success, error = executor.run(code_to_run)
+
+    if not success:
+        print(f"Code execution failed: {error}")
+        # Retry with error feedback
+        await code_chat.add_chat_message(
+            message=f"The code failed with error: {error}. Please fix it."
+        )
+        async for content in code_chat.invoke():
+            log_agent_message(content)
+            generated_code = content.content
+
+        code_to_run = generated_code
+        if "```python" in code_to_run:
+            code_to_run = code_to_run.split("```python")[1].split("```")[0]
+        elif "```" in code_to_run:
+            code_to_run = code_to_run.split("```")[1].split("```")[0]
+
+        success, error = executor.run(code_to_run)
+
+    if success:
+        print("Visualization code executed successfully!")
+    else:
+        print(f"Code execution failed after retries: {error}")
 
     # 7. Save the working visualization script.
-    pass
+    print("\n--- Saving Visualization Script ---")
+    with open("artifacts/visualization_script.py", "w") as f:
+        f.write(code_to_run)
+    print("Visualization script saved to artifacts/visualization_script.py")
 
     # 8. Invoke the report chat to generate the final report.
-    pass
+    print("\n--- Starting Report Chat ---")
+    logs = load_logs("agent_chat.log")
+    logs_content = "\n".join(logs[-50:])  # Get last 50 log entries
+
+    await report_chat.add_chat_message(
+        message=f"Generate a comprehensive data analysis report based on the following analysis results and agent workflow:\n\nAnalysis Results:\n{analysis_result}\n\nAgent Logs:\n{logs_content}"
+    )
+
+    final_report = None
+    async for content in report_chat.invoke():
+        log_agent_message(content)
+        print(f"{content.name}: {content.content[:200]}..." if len(content.content) > 200 else f"{content.name}: {content.content}")
+        final_report = content.content
 
     # 9. Save the final report.
-    pass
+    print("\n--- Saving Final Report ---")
+    save_final_report(final_report)
+    print("Workflow completed successfully!")
 
 
 # -----------------
