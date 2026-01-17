@@ -7,8 +7,10 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from semantic_kernel import Kernel
-from semantic_kernel.agents import ChatCompletionAgent, AgentGroupChat, TerminationStrategy
-from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
+from semantic_kernel.agents import ChatCompletionAgent, AgentGroupChat
+from semantic_kernel.agents.strategies import TerminationStrategy
+from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion, OpenAIChatPromptExecutionSettings
+from semantic_kernel.functions import KernelArguments
 
 load_dotenv()
 # -----------------
@@ -248,21 +250,23 @@ AGENT_CONFIG = {
     Response Style: Output ONLY valid Python code. No explanations, no markdown formatting, no commentary.
 
     Agent Instructions:
-    1. Analyze the provided cleaned dataset to determine appropriate visualizations.
-    2. Generate Python code that creates meaningful visualizations:
-       - Histograms for data distribution
-       - Box plots for outlier visualization
-       - Bar charts for categorical comparisons
-       - Scatter plots for relationships (if applicable)
+    1. Parse the provided analysis results to extract original data and cleaned data.
+    2. Generate Python code that creates a LINE GRAPH visualization showing:
+       - Original data as one line (including outliers)
+       - Cleaned data as another line (outliers removed, shown as gaps or interpolated)
+       - Both lines on the same plot for comparison
 
     Code Requirements:
     - Use pandas for data manipulation
-    - Use matplotlib and/or seaborn for plotting
-    - Create a figure with multiple subplots if needed
-    - Include proper labels, titles, and legends
-    - Save the final figure to 'artifacts/data_visualization.png' using plt.savefig()
+    - Use matplotlib for plotting
+    - Create a SINGLE line chart titled "Original vs Clean Data"
+    - X-axis: Date (formatted properly)
+    - Y-axis: Value
+    - Include a legend showing "Original Data" and "Clean Data"
+    - Use different colors for each line (e.g., blue for original, green for clean)
+    - Rotate x-axis labels for better readability
+    - Save the figure to 'artifacts/data_visualization.png' using plt.savefig(dpi=150, bbox_inches='tight')
     - Call plt.close() after saving to free memory
-    - Handle edge cases (empty data, missing values)
 
     Output Format:
     Output ONLY the Python code block. No explanations, no markdown code fences, no additional text.
@@ -468,9 +472,29 @@ AGENT_CONFIG = {
 # <TODO: Step 5 - Build the Agents and Teams>
 # 2. Implement the agent factory function.
 def create_agent(name, instructions, service, settings=None):
-    """Factory function to create a new ChatCompletionAgent."""
+    """Factory function to create a new ChatCompletionAgent.
+
+    Args:
+        name: The agent name
+        instructions: The agent instructions/prompt
+        service: The chat service to use
+        settings: Optional OpenAIChatPromptExecutionSettings for temperature control
+
+    Returns:
+        A configured ChatCompletionAgent instance
+    """
+    # Create execution settings with temperature if provided
+    if settings is not None:
+        kernel_args = KernelArguments(settings=settings)
+        return ChatCompletionAgent(
+            kernel=kernel,
+            service=chat_service,
+            name=name,
+            instructions=instructions,
+            arguments=kernel_args
+        )
     return ChatCompletionAgent(
-        kernel=kernel,  
+        kernel=kernel,
         service=chat_service,
         name=name,
         instructions=instructions
@@ -484,9 +508,9 @@ def create_agent(name, instructions, service, settings=None):
 class ApprovalTerminationStrategy(TerminationStrategy):
     """A custom termination strategy that stops after user approval."""
     async def should_agent_terminate(self, agent, history):
-        if "approved" in history[-1].content.lower():
+        if history and "approved" in history[-1].content.lower():
             return True
-        return await super().should_agent_terminate(agent, history)
+        return False
 
 
 # -----------------
@@ -494,40 +518,54 @@ class ApprovalTerminationStrategy(TerminationStrategy):
 # -----------------
 # <TODO: Step 5 - Build the Agents and Teams>
 # 3. Instantiate each agent with the correct name, prompt, and temperature setting.
+# Temperature settings: Low (0.0-0.3) for deterministic tasks, Higher (0.5-0.7) for creative tasks
+
+# Low temperature for code generation (needs to be precise and deterministic)
 python_agent = create_agent(
     name="PythonExecutorAgent",
     instructions=AGENT_CONFIG["PythonExecutorAgent"],
-    service=chat_service
+    service=chat_service,
+    settings=OpenAIChatPromptExecutionSettings(temperature=0.0)
 )
 
+# Medium temperature for data cleaning (some flexibility in outlier detection approach)
 cleaning_agent = create_agent(
     name="DataCleaning",
     instructions=AGENT_CONFIG["DataCleaning"],
-    service=chat_service
+    service=chat_service,
+    settings=OpenAIChatPromptExecutionSettings(temperature=0.3)
 )
 
+# Low temperature for statistics (calculations must be accurate)
 stats_agent = create_agent(
     name="DataStatistics",
     instructions=AGENT_CONFIG["DataStatistics"],
-    service=chat_service
+    service=chat_service,
+    settings=OpenAIChatPromptExecutionSettings(temperature=0.1)
 )
 
+# Low temperature for checker (validation must be consistent)
 checker_agent = create_agent(
     name="AnalysisChecker",
     instructions=AGENT_CONFIG["AnalysisChecker"],
-    service=chat_service
+    service=chat_service,
+    settings=OpenAIChatPromptExecutionSettings(temperature=0.0)
 )
 
+# Higher temperature for report generation (more creative writing)
 report_agent = create_agent(
     name="ReportGenerator",
     instructions=AGENT_CONFIG["ReportGenerator"],
-    service=chat_service
+    service=chat_service,
+    settings=OpenAIChatPromptExecutionSettings(temperature=0.5)
 )
 
+# Low temperature for report checker (validation must be consistent)
 report_checker_agent = create_agent(
     name="ReportChecker",
     instructions=AGENT_CONFIG["ReportChecker"],
-    service=chat_service
+    service=chat_service,
+    settings=OpenAIChatPromptExecutionSettings(temperature=0.0)
 )
 
 
@@ -667,7 +705,9 @@ async def main():
     async for content in report_chat.invoke():
         log_agent_message(content)
         print(f"{content.name}: {content.content[:200]}..." if len(content.content) > 200 else f"{content.name}: {content.content}")
-        final_report = content.content
+        # Save the report from ReportGenerator, not the "Approved" from ReportChecker
+        if content.name == "ReportGenerator":
+            final_report = content.content
 
     # 9. Save the final report.
     print("\n--- Saving Final Report ---")
